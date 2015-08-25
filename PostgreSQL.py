@@ -1,144 +1,130 @@
-#!/usr/bin/env python
+#!/usr/bin/python
 
 import re
 import commands
+import pyodbc
+import sys
+import json
 
-PLUGIN_NAME = 'PostgreSQL Plugin'
+PLUGIN_NAME='PostgreSQL'
+
 CONFIG_PARAMS = [
-    # ('config key', 'name', 'required'),
-    ('postgres_database', 'PostgreSQLDatabase', True),
-    ('postgres_user', 'PostgreSQLUser', True),
-    ('postgres_pass', 'PostgreSQLPassword', True),
-    ('postgres_host', 'PostgreSQLHost', True),
-    ('postgres_port', 'PostgreSQLPort', False),
+	# ('config key', 'name', 'required'),
+	('postgres_database', 'PostgreSQLDatabase', True),
+	('postgres_user', 'PostgreSQLUser', True),
+	('postgres_pass', 'PostgreSQLPassword', True),
+	('postgres_host', 'PostgreSQLHost', True),
+	('postgres_port', 'PostgreSQLPort', False),
+	('postgres_odbcdriver', 'PostgresODBCDriver', True),
 ]
 PLUGIN_STATS = [
-    'postgresVersion',
-    'postgresMaxConnections',
-    'postgresCurrentConnections',
-    'postgresLocks',
-    'postgresLogFile',
+#	'postgresVersion',
+	'postgresMaxConnections',
+	'postgresCurrentConnections',
+	'postgresTransactionLocks',
+	'postgresTableLocks',
+	'postgresAvailableConnections'
 ]
 
 #===============================================================================
 class PostgreSQL:
-    #---------------------------------------------------------------------------
-    def __init__(self, agent_config, checks_logger, raw_config):
-        self.agent_config = agent_config
-        self.checks_logger = checks_logger
-        self.raw_config = raw_config
+	#---------------------------------------------------------------------------
+	def __init__(self, agent_config, checks_logger, raw_config):
+		self.agent_config = agent_config
+		self.checks_logger = checks_logger
+		self.raw_config = raw_config
 
-        # get config options
-        if self.raw_config.get('PostgreSQL', False):
-            for key, name, required in CONFIG_PARAMS:
-                self.agent_config[name] = self.raw_config['PostgreSQL'].get(key, None)
-        else:
-            self.checks_logger.debug(
-                '%s: Postgres config section missing ([PostgreSQL]' % PLUGIN_NAME
-            )
-                
-        # reset plugin specific params
-        for param in PLUGIN_STATS:
-            setattr(self, param, None)
+		# get config options
 
-    #---------------------------------------------------------------------------
-    def run(self):
-        # make sure we have the necessary config params
-        for key, name, required in CONFIG_PARAMS:
-            if required and not self.agent_config.get(name, False):
-                self.checks_logger.debug(
-                    '%s: config not complete (missing: %s) under PostgreSQL' % (
-                        PLUGIN_NAME,
-                        key
-                    )
-                )
-                return False
+		if self.raw_config != None:
+			if self.raw_config.get('PostgreSQL', False):
+				for key, name, required in CONFIG_PARAMS:
+					self.agent_config[name] = self.raw_config['PostgreSQL'].get(key, None)
+			else:
+				self.checks_logger.debug(
+					'%s: Postgres config section missing ([PostgreSQL]' % PLUGIN_NAME
+				)
+				
+		# reset plugin specific params
+		for param in PLUGIN_STATS:
+			self.param = None 
+		#setattr(self, param, None)
 
-        # plugin expects psycopg2 to be available
-        try:
-            import psycopg2
-        except ImportError, e:
-            self.checks_logger.error('%s: unable to import psycopg2' % PLUGIN_NAME)
-            return False
-        if not self.agent_config.get('PostgreSQLPort'):
-            self.agent_config['PostgreSQLPort'] = 5432
+	#---------------------------------------------------------------------------
+	def run(self):
+		# make sure we have the necessary config params
+		if self.agent_config != None:
+			for key, name, required in CONFIG_PARAMS:
+				if required and not self.agent_config.get(name, False):
+					self.checks_logger.debug(
+						'%s: config not complete (missing: %s) under PostgreSQL' % (
+							PLUGIN_NAME,
+							key
+						)
+					)
+					return False
 
-        # connect
-        try:
-            db = psycopg2.connect(
-                database=self.agent_config.get('PostgreSQLDatabase'),
-                user=self.agent_config.get('PostgreSQLUser'),
-                password=self.agent_config.get('PostgreSQLPassword'),
-                port=self.agent_config.get('PostgreSQLPort'),
-                host=self.agent_config.get('PostgreSQLHost')
-            )
-        except psycopg2.OperationalError, e:
-            self.checks_logger.error(
-                '%s: PostgreSQL connection error: %s' % (PLUGIN_NAME, e)
-            )
-            return False
+		# connect using pyodbc
+		try:
+			db = pyodbc.connect('DRIVER={' + str(self.agent_config['PostgresODBCDriver']) + '};SERVER=' + str(self.agent_config['PostgreSQLHost']) + ';DATABASE=' +  str(self.agent_config['PostgreSQLDatabase']) + ';UID=' +  str(self.agent_config['PostgreSQLUser']) + ';PWD=' + str(self.agent_config['PostgreSQLPassword']) + ';')
+		except:
+			self.checks_logger.error(
+				'%s: PostgreSQL connection error: %s' % (PLUGIN_NAME, sys.exc_info()[0])
+			)
+			return False
 
-        # get version
-        if self.postgresVersion == None:
-            try:
-                cursor = db.cursor()
-                cursor.execute('SELECT VERSION()')
-                result = cursor.fetchone()
-                self.postgresVersion = result[0].split(' ')[1]
-            except psycopg2.OperationalError, e:
-                self.checks_logger.error(
-                    '%s: SQL query error when gettin version: %s' % (PLUGIN_NAME, e)
-                )
+		# get max connections
+		try:
+			cursor = db.cursor()
+			cursor.execute(
+				"SELECT setting AS mc FROM pg_settings WHERE name = 'max_connections'"
+			)
+			self.postgresMaxConnections = int(cursor.fetchone()[0])
+		except:
+			self.checks_logger.error(
+				'%s: SQL query error when getting max connections: %s' % (PLUGIN_NAME, sys.exc_info()[0])
+			)
+		#Current Connections
+		try:
+			cursor = db.cursor()
+			cursor.execute("SELECT COUNT(datid) FROM pg_database AS d LEFT JOIN pg_stat_activity AS s ON (s.datid = d.oid)")
+			self.postgresCurrentConnections = int(cursor.fetchone()[0])
+		except pyodbc.ProgrammingError, e:
+			self.checks_logger.error(
+				'%s: SQL query error when getting current connections: %s' % (PLUGIN_NAME, sys.exc_info()[0])
+			)
 
-        # get max connections
-        try:
-            cursor = db.cursor()
-            cursor.execute(
-                "SELECT setting AS mc FROM pg_settings WHERE name = 'max_connections'"
-            )
-            self.postgresMaxConnections = cursor.fetchone()[0]
-        except psycopg2.OperationalError, e:
-            self.checks_logger.error(
-                '%s: SQL query error when getting max connections: %s' % (PLUGIN_NAME, e)
-            )
-        try:
-            cursor = db.cursor()
-            cursor.execute("SELECT COUNT(datid) FROM pg_database AS d LEFT JOIN pg_stat_activity AS s ON (s.datid = d.oid)")
-            self.postgresCurrentConnections = cursor.fetchone()[0]
-        except psycopg2.OperationalError, e:
-            self.checks_logger.error(
-                '%s: SQL query error when getting current connections: %s' % (PLUGIN_NAME, e)
-            )
+		#Get transaction locks
+		try:
+			cursor = db.cursor()
+			cursor.execute("Select count(*) from (Select locked.pid as locked_pid, locker.pid as locker_pid,locked_act.usename as locked_uuser,locker_act.usename as locker_user,locked.virtualtransaction,locked.transactionid,locked.locktype from pg_locks locked ,pg_locks locker,pg_stat_activity locked_act,pg_stat_activity locker_act WHERE locker.granted = true and locked.granted = false and locked.pid = locked_act.pid and locker.pid = locker_act.pid and(locked.virtualtransaction=locker.virtualtransaction or locked.transactionid= locker.transactionid)) transactionlocks;")
+			response = int(cursor.fetchone()[0])
+			self.postgresTransactionLocks = response
+		except pyodbc.ProgrammingError, e:
+			self.checks_logger.error('%s: SQL query error when getting transaction locks: %s' % (PLUGIN_NAME, e))
+			#print e
+		#Get Table locks
+		try:
+			cursor = db.cursor()
+			cursor.execute("select count(*) from(Select locked.pid as locked_pid,locker.pid as locker_pid,locked_act.usename as locked_user,locker_act.usename as locker_user,locked.virtualtransaction,locked.transactionid,relname from pg_locks locked LEFT OUTER JOIN pg_class on locked.relation = pg_class.oid,pg_locks locker,pg_stat_activity locked_act,pg_stat_activity locker_act WHERE locker.granted = true and locked.granted = false and locked.pid = locked_act.pid and locker.pid = locker_act.pid and locked.relation=locker.relation) tablelocks;")
+			self.postgresTableLocks = int(cursor.fetchone()[0])
+		except pyodbc.ProgrammingError, e:
+			self.checks_logger.error('%s: SQL query error when getting transaction locks: %s' % (PLUGIN_NAME, e))
+	
+		#Calculate Connections available for use
+		self.postgresAvailableConnections = int(self.postgresMaxConnections) - int(self.postgresCurrentConnections)
 
-        # get locks
-        try:
-            self.postgresLocks = []
-            cursor = db.cursor()
-            cursor.execute("SELECT granted, mode, datname FROM pg_locks AS l JOIN pg_database d ON (d.oid = l.database)")
-            for results in cursor.fetchall():
-                self.postgresLocks.append(results)
-        except psycopg2.OperationalError, e:
-            self.checks_logger.error('%s: SQL query error when getting locks: %s' (PLUGIN_NAME, e))
+		# return the stats
+		stats = {}
+		for param in PLUGIN_STATS:
+			stats[param] = getattr(self, param, None)
 
-        # get logfile info
-        try:
-            self.postgresLogFile = []
-            cursor = db.cursor()
-            cursor.execute("SELECT name, CASE WHEN length(setting)<1 THEN '?' ELSE setting END AS s FROM pg_settings WHERE name IN ('log_destination','log_directory','log_filename','redirect_stderr','syslog_facility') ORDER BY name;")
-            for results in cursor.fetchall():
-                self.postgresLogFile.append(results)
-        except psycopg2.OperationalError, e:
-            self.checks_logger.error(
-                '%s: SQL query error when checking log file settings: %s' % (PLUGIN_NAME, e)
-            )
-
-        # return the stats
-        stats = {}
-        for param in PLUGIN_STATS:
-            stats[param] = getattr(self, param, None)
-        return stats
-
-    
+		#Uncomment to test connection string
+		#stats['connectionstring'] = 'DRIVER={' + str(self.agent_config['PostgresODBCDriver']) + '};SERVER=' + str(self.agent_config['PostgreSQLHost']) + ';DATABASE=' +  str(self.agent_config['PostgreSQLDatabase']) + ';UID=' +  str(self.agent_config['PostgreSQLUser']) + ';PWD=' + str(self.agent_config['PostgreSQLPassword']) + ';'
+		return stats
+		
+		
+	
 if __name__ == "__main__":
-    postgres = PostgreSQL(None, None, None)
-    print postgres.run()
+	postgres = PostgreSQL(None, None, None)
+	print postgres.run()

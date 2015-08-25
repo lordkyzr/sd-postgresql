@@ -4,18 +4,15 @@ h2. Overview
 
 This plugins provides the following monitoring services
 
+* updated from the prefork 4 years ago to PostgreSQL 9.4
+* updated to use pyodbc
+* update to use the driver instead of DSN
 * ensures we can connect to the database
-* gets version number
 * gets max connections count
 * gets current connections count
-* gets list of locks
-* gets logfile settings
-
-h2. Installation
-
-* Configure your agent so that it knows about plugins http://www.serverdensity.com/docs/agent/plugins/ 
-* Move PostgreSQL.py into that directory 
-* Restart the agent (service sd-agent restart)
+* calculates available connections
+* gets count of table locks
+* gets count of transactions locks
 
 h2. Configuration
 
@@ -28,4 +25,26 @@ postgres_user = username
 postgres_pass = password
 postgres_host = hostname
 postgres_port = port (optional, default is 5432)
+postgres_odbcdriver = PostgreSQL ANSI
 </pre>
+
+h2. Installation
+
+<pre>
+Dependencies:
+Requires:
+unixodbc, unixodbc-dev, python-dev, odbc-postgresql
+apt-get install unixodbc unixodbc-dev python-dev odbc-postgresql
+
+Edit /etc/odbc.ini for all 
+		
+PYODBC: 
+pip install pyodbc
+</pre>
+
+* Configure your agent so that it knows about plugins http://www.serverdensity.com/docs/agent/plugins/ 
+* Move PostgreSQL.py into that directory 
+* Restart the agent (service sd-agent restart)
+
+* TODO:
+* ADD DSN SUPPORT
