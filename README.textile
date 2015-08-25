@@ -36,7 +36,7 @@ Requires:
 unixodbc, unixodbc-dev, python-dev, odbc-postgresql
 apt-get install unixodbc unixodbc-dev python-dev odbc-postgresql
 
-Edit /etc/odbc.ini for all 
+Edit /etc/odbc.ini for DSN, not needed with configuration in /etc/sd-agent/
 		
 PYODBC: 
 pip install pyodbc
